@@ -64,11 +64,15 @@ type goImportPath interface {
 	Ident(string) protogen.GoIdent
 }
 
+var allFiles map[string]*protogen.File = map[string]*protogen.File{}
+
 // GenerateFile generates the contents of a .pb.go file.
 func GenerateFile(gen *protogen.Plugin, file *protogen.File) *protogen.GeneratedFile {
 	filename := file.GeneratedFilenamePrefix + ".pb.go"
 	g := gen.NewGeneratedFile(filename, file.GoImportPath)
 	f := newFileInfo(file)
+
+	allFiles[file.Proto.GetName()] = file
 
 	genStandaloneComments(g, f, int32(genid.FileDescriptorProto_Syntax_field_number))
 	genGeneratedHeader(gen, g, f)
@@ -422,13 +426,19 @@ func genMessageField(g *protogen.GeneratedFile, f *fileInfo, m *messageInfo, fie
 	if field.Desc.IsWeak() {
 		name = genid.WeakFieldPrefix_goname + name
 	}
-	g.Annotate(m.GoIdent.GoName+"."+name, field.Location)
-	leadingComments := appendDeprecationSuffix(field.Comments.Leading,
-		field.Desc.ParentFile(),
-		field.Desc.Options().(*descriptorpb.FieldOptions).GetDeprecated())
-	g.P(leadingComments,
-		name, " ", goType, tags,
-		trailingComment(field.Comments.Trailing))
+
+	if flatten, isFlatten := extractFlatten(m, field); isFlatten {
+		flatten.GenMessage(g, f)
+	} else {
+
+		g.Annotate(m.GoIdent.GoName+"."+name, field.Location)
+		leadingComments := appendDeprecationSuffix(field.Comments.Leading,
+			field.Desc.ParentFile(),
+			field.Desc.Options().(*descriptorpb.FieldOptions).GetDeprecated())
+		g.P(leadingComments,
+			name, " ", goType, tags,
+			trailingComment(field.Comments.Trailing))
+	}
 	sf.append(field.GoName)
 }
 
@@ -546,6 +556,12 @@ func genMessageBaseMethods(g *protogen.GeneratedFile, f *fileInfo, m *messageInf
 
 func genMessageGetterMethods(g *protogen.GeneratedFile, f *fileInfo, m *messageInfo) {
 	for _, field := range m.Fields {
+
+		if flatten, isFlatten := extractFlatten(m, field); isFlatten {
+			flatten.GetGetterMethods(g, f)
+			continue
+		}
+
 		genNoInterfacePragma(g, m.isTracked)
 
 		// Getter for parent oneof.
